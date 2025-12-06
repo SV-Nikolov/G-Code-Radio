@@ -47,7 +47,6 @@ class GCodeGenerator:
 ;
 
 ; Reset all systems
-M82                                    ; Set extruder to absolute mode
 G90                                    ; Set to absolute positioning
 G28                                    ; Home all axes
 G92 X100 Y100 Z100                     ; Set home position

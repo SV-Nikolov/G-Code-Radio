@@ -29,7 +29,7 @@ MANIFEST
 
 # PyInstaller
 *.manifest
-*.spec
+# *.spec  # Allow spec files for reproducible builds
 
 # Unit test / coverage reports
 htmlcov/
@@ -61,12 +61,9 @@ venv.bak/
 *~
 .DS_Store
 
-# Project specific
-output/*.gcode
-downloads/*.wav
-downloads/*.mp3
-logs/
-*.log
+# Build directories
+build/
+dist/
 
 # Config files
 .env
