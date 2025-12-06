@@ -58,7 +58,10 @@ class ComplexityReducer:
                 reduced = self._keep_important_notes(notes, target_count)
             elif complexity_level < 70:
                 # Medium reduction - merge similar notes
-                reduced = self._merge_similar_notes(notes, target_count)
+                reduced = self.merge_similar_notes(notes, tolerance_cents=50)
+                # If still too many, apply additional filtering
+                if len(reduced) > target_count:
+                    reduced = self._keep_important_notes(reduced, target_count)
             else:
                 # Light reduction - remove very short notes
                 reduced = self._remove_short_notes(notes, target_count)
