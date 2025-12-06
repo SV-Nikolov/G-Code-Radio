@@ -4,6 +4,11 @@ Moment S1 (2014) 3D Printer Configuration
 Defines all specifications, bounds, and constraints for the printer.
 """
 
+from src.utils.logger import Logger
+
+logger = Logger.get_logger(__name__)
+
+
 class MomentS1Config:
     """Configuration for Moment S1 (2014) 3D printer"""
     

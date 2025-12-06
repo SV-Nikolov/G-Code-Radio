@@ -6,6 +6,7 @@ librosa>=0.10.0
 pydub>=0.25.1
 numpy>=1.24.0
 scipy>=1.10.0
+soundfile>=0.12.0
 
 # Audio Format Support
 ffmpeg-python>=0.2.1
