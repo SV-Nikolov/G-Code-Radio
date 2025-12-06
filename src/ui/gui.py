@@ -9,6 +9,10 @@ import threading
 import sys
 from pathlib import Path
 
+import numpy as np
+from pydub import AudioSegment
+from pydub.playback import play
+
 from src.utils.logger import Logger
 from src.utils.error_handler import handle_error, GCodeRadioException
 
@@ -37,6 +41,7 @@ class GCodeRadioGUI:
     
     def setup_ui(self):
         """Setup the user interface"""
+        self._build_menu()
         # Header
         header_frame = ttk.Frame(self.root, padding="10")
         header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
@@ -65,7 +70,7 @@ class GCodeRadioGUI:
         input_frame = ttk.LabelFrame(content_frame, text="Input", padding="10")
         input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
-        ttk.Label(input_frame, text="YouTube URL or Audio File:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(input_frame, text="Audio File:").grid(row=0, column=0, sticky=tk.W)
         
         input_entry = ttk.Entry(input_frame, textvariable=self.input_var, width=60)
         input_entry.grid(row=1, column=0, padx=5, pady=5)
@@ -145,6 +150,7 @@ class GCodeRadioGUI:
         
         ttk.Button(button_frame, text="Visualize", command=self.show_visualization).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame, text="Clear Log", command=self.clear_log).grid(row=0, column=2, padx=5)
+        ttk.Button(button_frame, text="Copy Log", command=self.copy_log).grid(row=0, column=3, padx=5)
         
         # Progress bar
         self.progress = ttk.Progressbar(content_frame, mode='indeterminate')
@@ -159,11 +165,53 @@ class GCodeRadioGUI:
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
+        self._make_log_selectable()
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
         status_bar.grid(row=2, column=0, sticky=(tk.W, tk.E))
+
+    def _build_menu(self):
+        """Create menu bar with preview controls"""
+        menubar = tk.Menu(self.root)
+        preview_menu = tk.Menu(menubar, tearoff=0)
+        preview_menu.add_command(label="Play MIDI Preview", command=self.play_midi_preview)
+        menubar.add_cascade(label="Preview", menu=preview_menu)
+        self.root.config(menu=menubar)
+
+    def _make_log_selectable(self):
+        """Allow copying log text via context menu and shortcuts"""
+        self.log_text.configure(state=tk.NORMAL)
+
+        def copy_selection():
+            try:
+                selection = self.log_text.selection_get()
+                self.root.clipboard_clear()
+                self.root.clipboard_append(selection)
+            except tk.TclError:
+                pass
+
+        def select_all(event=None):
+            self.log_text.tag_add(tk.SEL, "1.0", tk.END)
+            self.log_text.mark_set(tk.INSERT, "1.0")
+            self.log_text.see(tk.INSERT)
+            return "break"
+
+        self.log_menu = tk.Menu(self.root, tearoff=0)
+        self.log_menu.add_command(label="Copy", command=copy_selection)
+        self.log_menu.add_command(label="Select All", command=lambda: select_all())
+
+        self.log_text.bind("<Control-a>", select_all)
+        self.log_text.bind("<Control-A>", select_all)
+        self.log_text.bind("<Button-3>", lambda e: self._show_log_menu(e))
+
+    def _show_log_menu(self, event):
+        """Show context menu on right-click"""
+        try:
+            self.log_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.log_menu.grab_release()
     
     def update_speed_label(self, value):
         """Update speed label"""
@@ -205,6 +253,15 @@ class GCodeRadioGUI:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.root.update_idletasks()
+
+    def copy_log(self):
+        """Copy entire log to clipboard"""
+        try:
+            text = self.log_text.get("1.0", tk.END)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except tk.TclError:
+            pass
     
     def clear_log(self):
         """Clear log output"""
@@ -219,7 +276,7 @@ class GCodeRadioGUI:
         # Validate input
         input_path = self.input_var.get().strip()
         if not input_path:
-            messagebox.showerror("Error", "Please provide a YouTube URL or audio file!")
+            messagebox.showerror("Error", "Please provide an audio file!")
             return
         
         output_path = self.output_var.get().strip()
@@ -244,7 +301,7 @@ class GCodeRadioGUI:
             self.log("="*60)
             
             # Import main processing function
-            from src.main import process_youtube_url, process_audio_file
+            from src.main import process_audio_file
             
             # Create args object
             class Args:
@@ -264,13 +321,8 @@ class GCodeRadioGUI:
                 self.complexity_var.get()
             )
             
-            # Detect URL vs file
-            if args.input.startswith(('http://', 'https://')):
-                self.log("Detected YouTube URL")
-                process_youtube_url(args)
-            else:
-                self.log("Detected audio file")
-                process_audio_file(args)
+            self.log("Detected audio file")
+            process_audio_file(args)
             
             self.log("\n" + "="*60)
             self.log("✓ Conversion complete!")
@@ -312,6 +364,111 @@ class GCodeRadioGUI:
         from src.ui.visualization import VisualizationWindow
         viz_window = tk.Toplevel(self.root)
         VisualizationWindow(viz_window, output_path)
+
+    # --- MIDI Preview ---
+    def play_midi_preview(self):
+        """Generate and play a quick MIDI-style preview from detected notes"""
+        if self.processing:
+            messagebox.showwarning("Processing", "Wait for the current conversion to finish.")
+            return
+
+        input_path = self.input_var.get().strip()
+        if not input_path:
+            messagebox.showerror("Error", "Please provide an audio file first.")
+            return
+
+        self.status_var.set("Generating MIDI preview...")
+        threading.Thread(target=self._play_midi_preview_worker, daemon=True).start()
+
+    def _play_midi_preview_worker(self):
+        try:
+            self.log("Starting MIDI preview...")
+            input_path = self.input_var.get().strip()
+
+            audio_file = self._ensure_local_wav(input_path)
+            if not audio_file:
+                self.log("✗ Unable to prepare audio for preview")
+                return
+
+            notes = self._extract_notes(audio_file)
+            if not notes:
+                self.log("✗ No notes detected for preview")
+                return
+
+            preview_audio = self._notes_to_audio(notes)
+            self.log("Playing MIDI preview (uses simple sine synthesis)...")
+            play(preview_audio)
+            self.log("✓ Preview finished")
+        except Exception as e:
+            self.log(f"✗ Preview error: {e}")
+        finally:
+            self.status_var.set("Ready")
+
+    def _ensure_local_wav(self, input_path: str) -> str:
+        """Download/convert input to a local WAV file for analysis"""
+        from src.audio.extractor import AudioExtractor
+
+        audio_file = input_path
+
+        if not Path(audio_file).exists():
+            return ""
+
+        if audio_file.endswith(".wav"):
+            return audio_file
+
+        self.log("Converting preview audio to WAV...")
+        extractor = AudioExtractor()
+        return extractor.convert_to_wav(audio_file)
+
+    def _extract_notes(self, audio_file: str):
+        """Run feature, pitch, and note detection to get parameterized notes"""
+        from src.audio.analyzer import AudioAnalyzer
+        from src.signal_processing.pitch_detection import PitchDetector
+        from src.signal_processing.note_detection import NoteDetector
+        from src.mapping.parameter_controller import ParameterController
+
+        analyzer = AudioAnalyzer()
+        features = analyzer.extract_features(audio_file)
+        onsets = analyzer.get_onset_frames(audio_file)
+
+        pitch_detector = PitchDetector()
+        pitch_data = pitch_detector.detect_pitch(audio_file)
+        confidence = pitch_detector.get_pitch_confidence(audio_file)
+
+        note_detector = NoteDetector()
+        voiced = pitch_detector.extract_voicing(pitch_data['frequencies'], confidence, threshold=0.1)
+        notes = note_detector.detect_notes(pitch_data, onsets, voiced)
+
+        if not notes:
+            return []
+
+        param_controller = ParameterController()
+        return param_controller.apply_all_parameters(
+            notes,
+            self.speed_var.get(),
+            self.pitch_var.get(),
+            self.complexity_var.get()
+        )
+
+    def _notes_to_audio(self, notes, sample_rate: int = 44100) -> AudioSegment:
+        """Convert note list to a simple sine-wave audio segment"""
+        audio = AudioSegment.silent(duration=0)
+
+        for note in notes:
+            freq = 440.0 * (2 ** ((note.get('midi', 69) - 69) / 12.0))
+            duration_s = max(float(note.get('duration', 0.2)), 0.05)
+            t = np.linspace(0, duration_s, int(sample_rate * duration_s), False)
+            waveform = 0.2 * np.sin(2 * np.pi * freq * t)
+            samples = (waveform * 32767).astype(np.int16)
+            segment = AudioSegment(
+                samples.tobytes(),
+                frame_rate=sample_rate,
+                sample_width=2,
+                channels=1
+            )
+            audio += segment
+
+        return audio
 
 
 def main():

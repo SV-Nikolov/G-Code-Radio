@@ -31,6 +31,10 @@ class MomentS1Config:
     # Stepper motor characteristics
     STEPPER_FREQUENCY_MIN = 100   # Hz
     STEPPER_FREQUENCY_MAX = 10000  # Hz
+
+    # Steps-per-mm (approximate; used to map audio frequency → feedrate)
+    STEPS_PER_MM_XY = 80   # Typical belt-driven axes
+    STEPS_PER_MM_Z = 400   # Typical leadscrew-driven axis
     
     # Home position
     HOME_X = 100
@@ -84,3 +88,10 @@ class MomentS1Config:
             Tuple of (x, y, z) home coordinates
         """
         return (self.HOME_X, self.HOME_Y, self.HOME_Z)
+
+    def get_steps_per_mm(self, axis: str) -> float:
+        """Return steps-per-mm for the given axis"""
+        axis = axis.upper()
+        if axis == 'Z':
+            return self.STEPS_PER_MM_Z
+        return self.STEPS_PER_MM_XY

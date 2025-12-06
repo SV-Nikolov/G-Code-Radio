@@ -1,10 +1,10 @@
-"""
-Map musical notes to stepper motor movement patterns
+"""Map musical notes to stepper motor movement patterns
 
 Converts MIDI notes to X/Y/Z movements that produce specific frequencies.
 """
 
 import numpy as np
+import random
 from src.utils.logger import Logger
 from src.utils.error_handler import ValidationError
 
@@ -28,6 +28,10 @@ class NoteMapper:
         self.printer_config = printer_config
         self.sr = 22050
         self.hop_length = 512
+        # Track a small oscillation window around home to avoid runaway travel
+        self._axis_pos = {'X': 0.0, 'Y': 0.0, 'Z': 0.0}
+        self._axis_dir = {'X': 1.0, 'Y': -1.0, 'Z': 1.0}
+        self._max_travel_per_note = 25.0  # mm window to stay near home
     
     def note_to_movement(self, midi_note: int, duration: float) -> dict:
         """
@@ -52,20 +56,41 @@ class NoteMapper:
             
             # Convert MIDI to frequency
             frequency = self.note_to_frequency(midi_note)
-            
-            # Convert frequency to feedrate
-            feedrate = self.frequency_to_feedrate(frequency)
-            
-            # Calculate movement distance based on duration and feedrate
-            distance = (feedrate / 60) * duration  # Convert mm/min to mm/s
-            
+
+            # Select axis first (affects steps-per-mm and feed caps)
+            axis = self._select_axis(midi_note)
+
+            # Convert frequency to feedrate using axis-specific steps/mm
+            feedrate, step_freq = self.frequency_to_feedrate(frequency, axis)
+
+            # Desired travel to honor the note duration at this feedrate
+            desired_distance = (feedrate / 60.0) * duration  # mm
+
+            # Keep motion within a small window around virtual home per axis
+            window = self._max_travel_per_note
+            dir_sign = self._axis_dir.get(axis, 1.0)
+            next_pos = self._axis_pos[axis] + dir_sign * desired_distance
+
+            # If exceeding window, flip direction and recompute
+            if abs(next_pos) > window:
+                dir_sign *= -1.0
+                self._axis_dir[axis] = dir_sign
+                next_pos = self._axis_pos[axis] + dir_sign * desired_distance
+                # If still too large, clamp to window edge
+                if abs(next_pos) > window:
+                    next_pos = window * (1 if next_pos > 0 else -1)
+
+            distance = next_pos - self._axis_pos[axis]
+            self._axis_pos[axis] = next_pos
+
             movement = {
                 'midi': midi_note,
                 'frequency': frequency,
-                'axis': self._select_axis(midi_note),
+                'axis': axis,
                 'distance': distance,
                 'feedrate': feedrate,
                 'duration': duration,
+                'step_frequency_target': step_freq,
             }
             
             return movement
@@ -96,7 +121,7 @@ class NoteMapper:
             logger.error(f"Failed to convert MIDI to frequency: {str(e)}")
             raise ValidationError(f"MIDI to frequency conversion failed: {str(e)}")
     
-    def frequency_to_feedrate(self, frequency: float) -> float:
+    def frequency_to_feedrate(self, frequency: float, axis: str) -> tuple:
         """
         Convert frequency to printer feedrate
         
@@ -107,7 +132,7 @@ class NoteMapper:
             frequency: Frequency in Hz
             
         Returns:
-            Feedrate in mm/min
+            (feedrate mm/min, target_step_frequency Hz)
         """
         try:
             # Frequency range for stepper motors
@@ -117,16 +142,20 @@ class NoteMapper:
             # Clamp frequency to valid range
             freq_clamped = max(min_freq, min(max_freq, frequency))
             
-            # Map frequency to feedrate
-            # Using a scaling factor: each Hz = feedrate mm/min
-            # This is a heuristic - adjust based on actual printer behavior
-            feedrate = freq_clamped * 60  # Convert Hz to cycles per minute
+            # Axis-specific steps/mm and feed caps
+            steps_per_mm = self.printer_config.get_steps_per_mm(axis)
+            axis_max_feed = self.printer_config.MAX_FEEDRATE_Z if axis == 'Z' else self.printer_config.MAX_FEEDRATE_XY
+
+            # Target feedrate that produces the desired step frequency
+            feedrate = (freq_clamped * 60.0) / steps_per_mm  # mm/min
+
+            # Clamp feedrate within printer limits
+            feedrate = max(self.printer_config.MIN_FEEDRATE, min(axis_max_feed, feedrate))
+
+            # Compute resulting step frequency after clamping (for reference)
+            step_frequency = feedrate * steps_per_mm / 60.0
             
-            # Clamp to printer limits
-            feedrate = max(self.printer_config.MIN_FEEDRATE, 
-                         min(self.printer_config.MAX_FEEDRATE_XY, feedrate))
-            
-            return feedrate
+            return feedrate, step_frequency
         
         except Exception as e:
             logger.error(f"Failed to convert frequency to feedrate: {str(e)}")
@@ -136,7 +165,7 @@ class NoteMapper:
         """
         Select which axis (X, Y, or Z) to use for a note
         
-        Lower notes use Z axis (slower), middle use X, higher use Y
+        Randomly selects from X, Y, Z for varied movement visualization
         
         Args:
             midi_note: MIDI note number
@@ -144,13 +173,8 @@ class NoteMapper:
         Returns:
             Axis character ('X', 'Y', or 'Z')
         """
-        # Divide MIDI range into thirds
-        if midi_note < 43:  # C2
-            return 'Z'
-        elif midi_note < 86:  # C6
-            return 'X'
-        else:
-            return 'Y'
+        # Random axis selection for varied movement patterns
+        return random.choice(['X', 'Y', 'Z'])
     
     def rotate_axis(self, movements: list) -> list:
         """

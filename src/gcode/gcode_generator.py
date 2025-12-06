@@ -64,7 +64,7 @@ G04 P1000                              ; Wait 1 second
             logger.error(error_msg)
             raise GCodeGenerationError(error_msg)
     
-    def movement_to_gcode(self, movement: dict, current_pos: list) -> str:
+    def movement_to_gcode(self, movement: dict, current_pos: list):
         """
         Convert single movement instruction to G-code
         
@@ -76,6 +76,13 @@ G04 P1000                              ; Wait 1 second
             G-code command string
         """
         try:
+            # Handle pause-only movements (rests)
+            if movement.get('pause'):
+                duration = movement.get('duration', 0)
+                dwell_ms = int(max(0, duration * 1000))
+                gcode = f"G4 P{dwell_ms}"
+                return gcode, current_pos, 0
+
             axis = movement.get('axis', 'X')
             distance = movement.get('distance', 0)
             feedrate = movement.get('feedrate', 1000)
@@ -95,9 +102,27 @@ G04 P1000                              ; Wait 1 second
             )
             
             # Generate G1 move command
-            gcode = f"G1 {axis}{new_pos[axis_index]:.2f} F{feedrate:.0f}"
+            # Ensure a minimal movement distance for audibility/variation
+            if abs(new_pos[axis_index] - current_pos[axis_index]) < 0.01:
+                new_pos[axis_index] = current_pos[axis_index] + (0.01 if distance >= 0 else -0.01)
+                new_pos[axis_index] = max(
+                    bounds[axis_name]['min'],
+                    min(bounds[axis_name]['max'], new_pos[axis_index])
+                )
             
-            return gcode
+            gcode = f"G1 {axis}{new_pos[axis_index]:.4f} F{feedrate:.0f}"
+
+            # Compute actual travel time for this move
+            travel_mm = abs(new_pos[axis_index] - current_pos[axis_index])
+            speed_mm_per_s = feedrate / 60.0
+            actual_time = travel_mm / speed_mm_per_s if speed_mm_per_s > 0 else 0.0
+
+            # If requested duration is longer, add dwell to match timing
+            dwell_ms = 0
+            if duration > actual_time:
+                dwell_ms = int(max(0, (duration - actual_time) * 1000))
+
+            return gcode, new_pos, dwell_ms
         
         except Exception as e:
             error_msg = f"Failed to convert movement to G-code: {str(e)}"
@@ -127,15 +152,11 @@ G04 P1000                              ; Wait 1 second
             
             for i, movement in enumerate(movements):
                 try:
-                    gcode_line = self.movement_to_gcode(movement, current_pos)
+                    gcode_line, new_pos, dwell_ms = self.movement_to_gcode(movement, current_pos)
                     gcode += gcode_line + "\n"
-                    
-                    # Update position tracking
-                    axis = movement.get('axis', 'X')
-                    axis_index = {'X': 0, 'Y': 1, 'Z': 2}.get(axis, 0)
-                    distance = movement.get('distance', 0)
-                    current_pos[axis_index] += distance
-                    
+                    if dwell_ms > 0:
+                        gcode += f"G4 P{dwell_ms}\n"  # Dwell to preserve note duration
+                    current_pos = new_pos
                 except Exception as e:
                     logger.warning(f"Failed to generate G-code for movement {i}: {str(e)}")
                     continue

@@ -76,7 +76,6 @@ def handle_error(error: Exception, user_message: str = None) -> str:
         return f"{user_message}\nDetails: {error_details}"
     else:
         error_messages = {
-            'AudioDownloadError': "Failed to download audio from YouTube. Please check the URL and try again.",
             'AudioProcessingError': "Failed to process audio file. Please ensure the file is valid.",
             'PitchDetectionError': "Failed to detect pitch from audio.",
             'NoteDetectionError': "Failed to convert pitch to musical notes.",

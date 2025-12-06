@@ -1,5 +1,5 @@
 """
-Main entry point for G-Code Radio application
+Main entry point for G-Code Radio application (local audio only)
 """
 
 import argparse
@@ -19,17 +19,15 @@ def main():
     """Main application entry point"""
     try:
         parser = argparse.ArgumentParser(
-            description="Convert YouTube audio to 3D printer G-code music",
+            description="Convert a local audio file to 3D printer G-code music",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
-  %(prog)s "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-  %(prog)s "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --speed 1.5 --pitch 2 --complexity 75
   %(prog)s "song.mp3" --output "output/song.gcode"
             """
         )
         
-        parser.add_argument("input", help="YouTube URL or audio file path")
+        parser.add_argument("input", help="Audio file path (mp3, wav, m4a, etc.)")
         
         parser.add_argument(
             "--speed",
@@ -72,10 +70,10 @@ Examples:
         Logger.setup_logging(level=args.log_level)
         
         print("\n" + "=" * 60)
-        print(" G-Code Radio v0.1.0 - 3D Printer Music Player")
+        print(" G-Code Radio v0.1.0 - 3D Printer Music Player (local audio)")
         print("=" * 60 + "\n")
         
-        logger.info(f"Input: {args.input}")
+        logger.info(f"Input file: {args.input}")
         logger.info(f"Speed: {args.speed}x")
         logger.info(f"Pitch: {args.pitch:+d} semitones")
         logger.info(f"Complexity: {args.complexity}%")
@@ -86,13 +84,9 @@ Examples:
         pc = ParameterController()
         pc.validate_parameters(args.speed, args.pitch, args.complexity)
         
-        # Detect if input is a URL or file
-        if args.input.startswith(('http://', 'https://')):
-            logger.info("Detected YouTube URL")
-            process_youtube_url(args)
-        else:
-            logger.info("Detected audio file")
-            process_audio_file(args)
+        # Process local audio file only
+        logger.info("Detected audio file")
+        process_audio_file(args)
         
         print("\n" + "=" * 60)
         print(" Conversion complete!")
@@ -108,29 +102,6 @@ Examples:
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         sys.exit(1)
-
-
-def process_youtube_url(args):
-    """Process YouTube URL and convert to G-code"""
-    logger.info("=" * 60)
-    logger.info("PHASE 1: Downloading audio from YouTube")
-    logger.info("=" * 60)
-    
-    from src.audio.downloader import YouTubeDownloader
-    from src.audio.extractor import AudioExtractor
-    
-    # Download audio
-    downloader = YouTubeDownloader()
-    audio_file = downloader.download(args.input, "downloads/audio")
-    
-    # Convert to WAV if needed
-    if not audio_file.endswith('.wav'):
-        logger.info("Converting to WAV format...")
-        extractor = AudioExtractor()
-        audio_file = extractor.convert_to_wav(audio_file)
-    
-    # Process the audio file
-    process_audio_file_internal(audio_file, args)
 
 
 def process_audio_file(args):
@@ -222,6 +193,11 @@ def process_audio_file_internal(audio_file: str, args):
             logger.warning(f"Failed to convert note: {str(e)}")
     
     logger.info(f"Generated {len(movements)} movements")
+    if movements:
+        preview = movements[:5]
+        logger.info("Sample movements (axis, distance mm, feedrate mm/min):")
+        for m in preview:
+            logger.info(f"  {m['axis']}  dist={m['distance']:.4f}  F={m['feedrate']:.0f}")
     
     # Step 6: Validate bounds
     logger.info("Validating bounds...")
